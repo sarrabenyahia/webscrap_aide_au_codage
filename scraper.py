@@ -7,11 +7,12 @@ import json
 from datetime import datetime
 
 class CIMScraper:
-    def __init__(self, csv_file, output_file="synonymes_cim.xlsx", checkpoint_file="checkpoint.json", delay=1):
+    def __init__(self, csv_file, output_file="synonymes_cim.xlsx", checkpoint_file="checkpoint.json", delay=1, code_column=6):
         self.csv_file = csv_file
         self.output_file = output_file
         self.checkpoint_file = checkpoint_file
         self.delay = delay
+        self.code_column = code_column
         self.session = requests.Session()
         self.session.headers.update({
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
@@ -21,8 +22,14 @@ class CIMScraper:
         """Charge les codes depuis le fichier CSV"""
         try:
             df = pd.read_csv(self.csv_file, sep=';', header=None)
-            # Colonne 9 (index 8) contient les codes
-            codes = df.iloc[:, 8].dropna().unique().tolist()
+            # Affiche les premières lignes pour débugger
+            print("Aperçu des données CSV:")
+            print(df.head())
+            print(f"\nUtilisation de la colonne {self.code_column}")
+            
+            # Charge les codes depuis la colonne spécifiée
+            codes = df.iloc[:, self.code_column].dropna().unique().tolist()
+            print(f"Premiers codes trouvés: {codes[:10]}")
             print(f"Chargé {len(codes)} codes uniques")
             return codes
         except Exception as e:
@@ -32,6 +39,71 @@ class CIMScraper:
     def clean_code(self, code):
         """Nettoie le code en supprimant les points"""
         return str(code).replace('.', '').replace('-', '')
+    
+    def expand_synonyme(self, synonyme_text):
+        """Développe un synonyme avec parenthèses en plusieurs synonymes"""
+        import re
+        
+        # Trouve toutes les expressions entre parenthèses
+        parentheses_pattern = r'\(([^)]+)\)'
+        parentheses_matches = re.findall(parentheses_pattern, synonyme_text)
+        
+        if not parentheses_matches:
+            # Pas de parenthèses, retourne le synonyme tel quel
+            return [synonyme_text.strip()]
+        
+        # Remplace les parenthèses par des espaces pour préserver la structure
+        base_text = synonyme_text
+        for match in parentheses_matches:
+            base_text = base_text.replace(f'({match})', ' ', 1)
+        
+        # Nettoie les espaces multiples
+        base_text = re.sub(r'\s+', ' ', base_text).strip()
+        
+        # Collecte toutes les options de chaque groupe de parenthèses
+        all_options = []
+        for match in parentheses_matches:
+            # Sépare les options par des parenthèses fermantes suivies d'ouvrantes
+            options = re.split(r'\)\(', match)
+            all_options.append([opt.strip() for opt in options if opt.strip()])
+        
+        # Génère toutes les combinaisons possibles
+        results = []
+        
+        # Ajoute le synonyme de base (sans aucune option)
+        if base_text:
+            results.append(base_text)
+        
+        # Génère les combinaisons avec les options
+        if all_options:
+            # Flatten la liste des options
+            all_flat_options = []
+            for options_group in all_options:
+                all_flat_options.extend(options_group)
+            
+            # Trouve la position où insérer les options (généralement après le premier mot)
+            words = base_text.split()
+            if len(words) > 1:
+                # Insère après le premier mot
+                base_part = words[0]
+                end_part = ' '.join(words[1:]) if len(words) > 1 else ''
+                
+                for option in all_flat_options:
+                    if end_part:
+                        combined = f"{base_part} {option} {end_part}".strip()
+                    else:
+                        combined = f"{base_part} {option}".strip()
+                    results.append(combined)
+            else:
+                # Si un seul mot, ajoute l'option après
+                for option in all_flat_options:
+                    combined = f"{base_text} {option}".strip()
+                    results.append(combined)
+        
+        # Supprime les doublons et les entrées vides
+        results = list(set([r for r in results if r]))
+        
+        return results if results else [synonyme_text.strip()]
     
     def load_checkpoint(self):
         """Charge le point de sauvegarde s'il existe"""
@@ -78,7 +150,9 @@ class CIMScraper:
             for element in synonymes_elements:
                 synonyme_text = element.get_text(strip=True)
                 if synonyme_text:
-                    synonymes.append(synonyme_text)
+                    # Développe le synonyme s'il contient des parenthèses
+                    expanded_synonymes = self.expand_synonyme(synonyme_text)
+                    synonymes.extend(expanded_synonymes)
             
             return synonymes
             
@@ -171,18 +245,20 @@ class CIMScraper:
                 except:
                     pass
 
-
+# Utilisation
 if __name__ == "__main__":
     # Configuration
     CSV_FILE = "./CIM10GM2024_CSV_S_FR_versionmétadonnée_codes_20241031_new_col.csv"  
     OUTPUT_FILE = "synonymes_cim.xlsx"
-    DELAY = 3  # Délai en secondes entre chaque requête
+    DELAY = 0  # Délai en secondes entre chaque requête
     
     # Création et lancement du scraper
     scraper = CIMScraper(
         csv_file=CSV_FILE,
         output_file=OUTPUT_FILE,
-        delay=DELAY
+        delay=DELAY,
+        code_column=8  # Changez cette valeur pour tester différentes colonnes
     )
     
     scraper.run()
+    
